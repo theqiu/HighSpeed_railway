@@ -1,3 +1,4 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a//dev/null b/README.md
 index 0000000000000000000000000000000000000000..29b6f685018b4c9a36d59d32dcbc2e41a2556fce 100644
 --- a//dev/null
@@ -112,3 +113,6 @@ index 0000000000000000000000000000000000000000..29b6f685018b4c9a36d59d32dcbc2e41
 +---
 +
 +如在使用过程中遇到问题或需要新增功能，可在 Issue 中反馈或直接修改对应模块。
+ 
+EOF
+)
