@@ -1,9 +1,3 @@
- (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a//dev/null b/README.md
-index 0000000000000000000000000000000000000000..29b6f685018b4c9a36d59d32dcbc2e41a2556fce 100644
---- a//dev/null
- b/README.md
-@@ -0,0 1,109 @@
 # 检修数据分析与可视化平台
 
 本项目提供一个基于 Streamlit 的检修数据分析平台，用于读取 CSV 格式的检修记录，完成数据清洗、筛选、统计分析与可视化展示。通过上传数据或使用示例数据，用户可以快速查看不同批次、检测项目、检修人员的工作量与质量情况，并将结果导出。
