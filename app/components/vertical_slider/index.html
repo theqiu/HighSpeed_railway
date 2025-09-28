@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <script src="https://unpkg.com/streamlit-component-lib@1.8.0/dist/index.js"></script>
+    <style>
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      }
+      .slider-wrapper {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        padding: 6px;
+        box-sizing: border-box;
+      }
+      .slider-wrapper input[type="range"] {
+        writing-mode: bt-lr;
+        -webkit-appearance: slider-vertical;
+        width: 28px;
+        max-width: 60px;
+        min-height: 80px;
+      }
+      .slider-label {
+        font-size: 0.85rem;
+        margin-bottom: 8px;
+        text-align: center;
+        color: #444;
+      }
+      .slider-value {
+        font-size: 0.8rem;
+        margin-top: 6px;
+        color: #555;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="slider-wrapper">
+      <div class="slider-label" id="slider-label"></div>
+      <input type="range" id="vertical-slider" orient="vertical" />
+      <div class="slider-value" id="slider-value"></div>
+    </div>
+    <script>
+      const { Streamlit } = window;
+
+      function updateSlider(args) {
+        const slider = document.getElementById("vertical-slider");
+        const label = document.getElementById("slider-label");
+        const valueLabel = document.getElementById("slider-value");
+
+        const min = Number.isFinite(args.min) ? args.min : 0;
+        const max = Number.isFinite(args.max) ? args.max : min;
+        const step = Number.isFinite(args.step) && args.step > 0 ? args.step : 1;
+        const current = Math.min(Math.max(Number(args.value ?? min), min), max);
+        const height = Number.isFinite(args.height) ? Math.max(args.height, 120) : 220;
+
+        slider.min = min;
+        slider.max = max;
+        slider.step = step;
+        slider.value = current;
+        slider.style.height = `${height - 40}px`;
+
+        if (args.label) {
+          label.textContent = args.label;
+          label.style.display = "block";
+        } else {
+          label.style.display = "none";
+        }
+
+        valueLabel.textContent = current;
+        Streamlit.setComponentValue(current);
+      }
+
+      Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, (event) => {
+        updateSlider(event.detail.args || {});
+      });
+
+      document.getElementById("vertical-slider").addEventListener("input", (event) => {
+        const value = Number(event.target.value);
+        document.getElementById("slider-value").textContent = value;
+        Streamlit.setComponentValue(value);
+      });
+
+      Streamlit.setComponentReady();
+    </script>
+  </body>
+</html>
