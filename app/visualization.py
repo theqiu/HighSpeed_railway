@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 import pandas as pd
@@ -42,11 +43,15 @@ def pie_status(df: pd.DataFrame) -> px.pie:
     return fig
 
 
-def bar_ranking(df: pd.DataFrame, dimension: str, metric: str = "count") -> px.bar:
+def bar_ranking(
+    df: pd.DataFrame, dimension: str, metric: str = "count", *, height: Optional[int] = None
+) -> px.bar:
     """Horizontal bar chart for ranking type data."""
 
+    sorted_df = df.sort_values(metric)
+
     fig = px.bar(
-        df.sort_values(metric),
+        sorted_df,
         x=metric,
         y=dimension,
         orientation="h",
@@ -54,8 +59,13 @@ def bar_ranking(df: pd.DataFrame, dimension: str, metric: str = "count") -> px.b
         text=metric,
         color_continuous_scale="Blues",
     )
-    fig.update_layout(margin=dict(l=80, r=20, t=30, b=20))
+    calculated_height = max(360, 40 * max(len(sorted_df), 1))
+    fig.update_layout(
+        margin=dict(l=80, r=20, t=30, b=20),
+        height=height or calculated_height,
+    )
     fig.update_traces(texttemplate="%{x}", textposition="outside", cliponaxis=False)
+    fig.update_yaxes(autorange="reversed")
     return fig
 
 
@@ -199,7 +209,9 @@ def wheel_profile_chart(sequence: pd.DataFrame, title: str) -> px.line:
     return fig
 
 
-def wheelseat_average_panel_chart(panels: pd.DataFrame, title: str) -> go.Figure:
+def wheelseat_average_panel_chart(
+    panels: pd.DataFrame, title: str, *, columns: int = 2
+) -> go.Figure:
     """Render wheel seat average values as per-panel subplots."""
 
     if panels.empty:
@@ -218,18 +230,26 @@ def wheelseat_average_panel_chart(panels: pd.DataFrame, title: str) -> go.Figure
     data = data.sort_values(sort_columns).reset_index(drop=True)
     panels_order = data["panel_name"].unique().tolist()
 
+    panel_count = len(panels_order)
+    cols = max(1, min(columns, panel_count))
+    rows = math.ceil(panel_count / cols)
+
     subplot_titles = [f"{name}" for name in panels_order]
-    rows = len(subplot_titles)
+    total_subplots = rows * cols
+    if len(subplot_titles) < total_subplots:
+        subplot_titles.extend([""] * (total_subplots - len(subplot_titles)))
 
     fig = make_subplots(
         rows=rows,
-        cols=1,
+        cols=cols,
         shared_xaxes=False,
         vertical_spacing=0.08,
         subplot_titles=subplot_titles,
     )
 
-    for idx, panel_name in enumerate(panels_order, start=1):
+    for idx, panel_name in enumerate(panels_order):
+        row = idx // cols + 1
+        col = idx % cols + 1
         subset = data[data["panel_name"] == panel_name].copy()
         if "section_rank" in subset.columns:
             subset = subset.sort_values(["section_rank", "section"])  # ensure consistent ordering
@@ -261,13 +281,13 @@ def wheelseat_average_panel_chart(panels: pd.DataFrame, title: str) -> go.Figure
         if customdata is not None:
             trace_kwargs["customdata"] = customdata
 
-        fig.add_trace(go.Scatter(**trace_kwargs), row=idx, col=1)
-        fig.update_yaxes(title_text="测量值", row=idx, col=1)
-        fig.update_xaxes(title_text="截面", row=idx, col=1, type="category")
+        fig.add_trace(go.Scatter(**trace_kwargs), row=row, col=col)
+        fig.update_yaxes(title_text="测量值", row=row, col=col)
+        fig.update_xaxes(title_text="截面", row=row, col=col, type="category")
 
     fig.update_layout(
         title=title,
-        height=max(360, 260 * rows),
+        height=max(360, 320 * rows),
         showlegend=False,
         margin=dict(t=80, b=40, l=60, r=30),
     )

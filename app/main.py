@@ -152,19 +152,71 @@ def render_charts(filtered: pd.DataFrame, artifacts: dict) -> None:
         artifacts["figures"]["状态堆叠趋势"] = stacked_fig
         artifacts["tables"]["时间序列明细"] = ts.copy()
 
-    st.subheader("检修人员 Top 10")
-    top_creators = top_entities(filtered, "creator", limit=10)
-    creator_fig = bar_ranking(top_creators, "creator")
-    st.plotly_chart(creator_fig, use_container_width=True)
-    artifacts["figures"]["检修人员Top10"] = creator_fig
-    artifacts["tables"]["检修人员Top10"] = top_creators.copy()
+    st.subheader("检修人员排行")
+    creator_rankings = top_entities(filtered, "creator", limit=None)
+    if creator_rankings.empty:
+        st.info("当前筛选条件下没有检修人员数据。")
+    else:
+        max_creators = len(creator_rankings)
+        min_window = 1 if max_creators == 1 else min(10, max_creators)
+        window_size = st.slider(
+            "显示检修人员数量",
+            min_value=min_window,
+            max_value=max_creators,
+            value=min(15, max_creators),
+            key="creator_window",
+        )
+        if max_creators > window_size:
+            start_index = st.slider(
+                "起始序号",
+                min_value=0,
+                max_value=max_creators - window_size,
+                value=0,
+                key="creator_start",
+            )
+        else:
+            start_index = 0
+        visible_creators = creator_rankings.iloc[start_index : start_index + window_size]
+        figure_height = max(360, 40 * len(visible_creators))
+        creator_fig = bar_ranking(visible_creators, "creator", height=figure_height)
+        st.plotly_chart(creator_fig, use_container_width=True)
+        artifacts["figures"]["检修人员排行"] = creator_fig
+        artifacts["tables"]["检修人员排行"] = creator_rankings.copy()
 
-    st.subheader("检测项目 Top 10")
-    top_qc = top_entities(filtered, "qcitem", limit=10)
-    qc_fig = bar_ranking(top_qc, "qcitem")
-    st.plotly_chart(qc_fig, use_container_width=True)
-    artifacts["figures"]["检测项目Top10"] = qc_fig
-    artifacts["tables"]["检测项目Top10"] = top_qc.copy()
+    st.subheader("检测项目排行")
+    exclusion_pattern = r"(备注|说明)"
+    qc_filtered = filtered.copy()
+    if "qcitem" in qc_filtered.columns:
+        qc_filtered = qc_filtered[~qc_filtered["qcitem"].astype(str).str.contains(exclusion_pattern, na=False)]
+    qc_rankings = top_entities(qc_filtered, "qcitem", limit=None)
+    if qc_rankings.empty:
+        st.info("当前筛选条件下没有检测项目数据。")
+    else:
+        max_items = len(qc_rankings)
+        min_window = 1 if max_items == 1 else min(10, max_items)
+        window_size = st.slider(
+            "显示检测项目数量",
+            min_value=min_window,
+            max_value=max_items,
+            value=min(15, max_items),
+            key="qc_window",
+        )
+        if max_items > window_size:
+            start_index = st.slider(
+                "项目起始序号",
+                min_value=0,
+                max_value=max_items - window_size,
+                value=0,
+                key="qc_start",
+            )
+        else:
+            start_index = 0
+        visible_qc = qc_rankings.iloc[start_index : start_index + window_size]
+        figure_height = max(360, 40 * len(visible_qc))
+        qc_fig = bar_ranking(visible_qc, "qcitem", height=figure_height)
+        st.plotly_chart(qc_fig, use_container_width=True)
+        artifacts["figures"]["检测项目排行"] = qc_fig
+        artifacts["tables"]["检测项目排行"] = qc_rankings.copy()
 
     st.subheader("人员与项目关联热力图")
     pivot = (
@@ -357,7 +409,18 @@ def render_wheelseat_analysis(df: pd.DataFrame, artifacts: dict) -> None:
                 title = title_prefix
             panel_data = wheelseat_average_panels(seq)
             if not panel_data.empty:
-                panel_fig = wheelseat_average_panel_chart(panel_data, title)
+                max_panels = len(panel_data["panel_name"].unique())
+                default_cols = 2 if max_panels >= 2 else 1
+                columns_per_row = st.slider(
+                    "每行展示子图数量",
+                    min_value=1,
+                    max_value=min(3, max_panels) if max_panels else 1,
+                    value=default_cols,
+                    key=f"panel_columns_{selected_wheel}",
+                )
+                panel_fig = wheelseat_average_panel_chart(
+                    panel_data, title, columns=columns_per_row
+                )
                 st.plotly_chart(panel_fig, use_container_width=True)
                 artifacts["figures"][title] = panel_fig
 

@@ -79,7 +79,7 @@ def time_series(df: pd.DataFrame, freq: str = "D") -> pd.DataFrame:
 def top_entities(
     df: pd.DataFrame,
     column: str,
-    limit: int = 10,
+    limit: Optional[int] = 10,
     status: Optional[str] = None,
 ) -> pd.DataFrame:
     """Return the top ``limit`` entities sorted by inspection counts.
@@ -102,7 +102,9 @@ def top_entities(
         subset = df
 
     result = aggregate_by(subset, column)
-    return result.head(limit)
+    if limit is not None and limit > 0:
+        return result.head(limit)
+    return result
 
 
 _NUMERIC_PATTERN = re.compile(r"^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$")
@@ -160,7 +162,14 @@ def attach_numeric_values(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-_AVERAGE_PATTERN = re.compile(r"(?P<prefix>.+?)(?:截面)?(?P<section>[A-Za-z0-9]+)平均值$")
+_AVERAGE_PATTERN = re.compile(
+    r"(?P<prefix>.+?)"
+    r"(?:\s*[：:\-—]?\s*)?"
+    r"(?:截面)?\s*"
+    r"(?P<section>[A-Za-z0-9]+)"
+    r"\s*平均值$",
+    re.IGNORECASE,
+)
 _SECTION_ORDER = {letter: idx for idx, letter in enumerate(string.ascii_uppercase, start=1)}
 
 
@@ -181,11 +190,13 @@ def _parse_wheelseat_average(label: object) -> Tuple[Optional[str], Optional[str
         return prefix, section
 
     if text.endswith("平均值"):
-        prefix = text[: -len("平均值")].strip().rstrip(":：-—")
+        prefix = text[: -len("平均值")].strip()
+        prefix = re.sub(r"(?:截面)?\s*[A-Za-z0-9]+$", "", prefix).rstrip(":：-—")
         return prefix or None, "平均值"
 
     if text.endswith("平均"):
-        prefix = text[: -len("平均")].strip().rstrip(":：-—")
+        prefix = text[: -len("平均")].strip()
+        prefix = re.sub(r"(?:截面)?\s*[A-Za-z0-9]+$", "", prefix).rstrip(":：-—")
         return prefix or None, "平均"
 
     return None, None
