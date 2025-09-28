@@ -162,14 +162,37 @@ def attach_numeric_values(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-_AVERAGE_PATTERN = re.compile(
-    r"(?P<prefix>.+?)"
-    r"(?:\s*[：:\-—]?\s*)?"
-    r"(?:截面)?\s*"
-    r"(?P<section>[A-Za-z0-9]+)"
-    r"\s*平均值$",
+_SECTION_SUFFIX_PATTERN = re.compile(
+    r"(平均值?|平均)(?:\s*[-_/]?\s*\d+)?\s*$",
     re.IGNORECASE,
 )
+_TRAILING_NOTE_PATTERN = re.compile(r"[（(][^）)]*[)）]\s*$")
+_SECTION_PATTERNS = [
+    re.compile(
+        r"(?P<prefix>.+?)(?:\s*[：:\-—]?\s*)?截面\s*(?P<section>[A-Za-z0-9]+)(?:\s*平均值?|\s*平均)?(?:\s*[-_/]?\s*\d+)?\s*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?P<prefix>.+?)(?:\s*[：:\-—]?\s*)?(?P<section>[A-Za-z0-9]+)\s*截面(?:\s*平均值?|\s*平均)?(?:\s*[-_/]?\s*\d+)?\s*$",
+        re.IGNORECASE,
+    ),
+]
+
+
+def _normalise_panel_prefix(prefix: Optional[str]) -> Optional[str]:
+    """Standardise the extracted panel prefix."""
+
+    if prefix is None:
+        return None
+
+    cleaned = str(prefix).strip()
+    if not cleaned:
+        return None
+
+    cleaned = re.sub(r"[：:\-—]+$", "", cleaned).strip()
+    return cleaned or None
+
+
 _SECTION_ORDER = {letter: idx for idx, letter in enumerate(string.ascii_uppercase, start=1)}
 
 
@@ -183,21 +206,34 @@ def _parse_wheelseat_average(label: object) -> Tuple[Optional[str], Optional[str
     if not text:
         return None, None
 
-    match = _AVERAGE_PATTERN.search(text)
-    if match:
-        prefix = match.group("prefix").strip().rstrip(":：-—")
-        section = match.group("section").upper()
-        return prefix, section
+    text = _TRAILING_NOTE_PATTERN.sub("", text).strip()
 
-    if text.endswith("平均值"):
-        prefix = text[: -len("平均值")].strip()
-        prefix = re.sub(r"(?:截面)?\s*[A-Za-z0-9]+$", "", prefix).rstrip(":：-—")
-        return prefix or None, "平均值"
+    for pattern in _SECTION_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            prefix = _normalise_panel_prefix(match.group("prefix"))
+            section = match.group("section")
+            if prefix and section:
+                return prefix, section.upper()
 
-    if text.endswith("平均"):
-        prefix = text[: -len("平均")].strip()
-        prefix = re.sub(r"(?:截面)?\s*[A-Za-z0-9]+$", "", prefix).rstrip(":：-—")
-        return prefix or None, "平均"
+    stripped = _SECTION_SUFFIX_PATTERN.sub("", text).strip()
+    if stripped:
+        for pattern in _SECTION_PATTERNS:
+            match = pattern.search(stripped)
+            if match:
+                prefix = _normalise_panel_prefix(match.group("prefix"))
+                section = match.group("section")
+                if prefix and section:
+                    return prefix, section.upper()
+
+    stripped = stripped.rstrip("截面").rstrip(":：-—").strip()
+    if stripped:
+        tail_match = re.search(r"([A-Za-z0-9]+)$", stripped)
+        if tail_match:
+            section = tail_match.group(1).upper()
+            prefix = _normalise_panel_prefix(stripped[: tail_match.start()])
+            if prefix and section:
+                return prefix, section
 
     return None, None
 
