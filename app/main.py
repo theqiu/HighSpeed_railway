@@ -52,6 +52,7 @@ from app.exporting import (
     figure_to_image_bytes,
     prepare_chart_images,
 )
+from app.widgets import vertical_slider
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SAMPLE_DATA = BASE_DIR / "data" / "sample_inspections.csv"
@@ -180,15 +181,16 @@ def render_charts(filtered: pd.DataFrame, artifacts: dict) -> None:
 
         if slider_col is not None:
             with slider_col:
-                st.slider(
-                    "检修人员滚动条",
+                new_start = vertical_slider(
+                    key=f"{start_key}_slider",
+                    label="检修人员滚动条",
                     min_value=0,
                     max_value=max_creators - window_size,
                     value=start_index,
-                    key=start_key,
                     step=1,
-                    label_visibility="collapsed",
+                    height=max(260, window_size * 20),
                 )
+                st.session_state[start_key] = new_start
                 st.caption("滚动查看")
 
         artifacts["figures"]["检修人员排行"] = creator_fig
@@ -226,15 +228,16 @@ def render_charts(filtered: pd.DataFrame, artifacts: dict) -> None:
 
         if slider_col is not None:
             with slider_col:
-                st.slider(
-                    "检测项目滚动条",
+                new_qc_start = vertical_slider(
+                    key=f"{start_key}_slider",
+                    label="检测项目滚动条",
                     min_value=0,
                     max_value=max_items - window_size,
                     value=start_index,
-                    key=start_key,
                     step=1,
-                    label_visibility="collapsed",
+                    height=max(260, window_size * 20),
                 )
+                st.session_state[start_key] = new_qc_start
                 st.caption("滚动查看")
 
         artifacts["figures"]["检测项目排行"] = qc_fig
@@ -253,11 +256,38 @@ def render_charts(filtered: pd.DataFrame, artifacts: dict) -> None:
         artifacts["tables"]["人员项目交叉频次"] = pivot.copy()
 
 
+def _matrix_cache_key(df: pd.DataFrame) -> str:
+    if not {"opno", "xb005"}.issubset(df.columns):
+        return str(len(df))
+
+    subset = (
+        df.loc[:, ["opno", "xb005"]]
+        .dropna()
+        .astype(str)
+        .sort_values(["opno", "xb005"], kind="mergesort")
+    )
+    if subset.empty:
+        return "empty"
+
+    hashed = pd.util.hash_pandas_object(subset, index=False)
+    checksum = int(hashed.sum())
+    return f"{len(subset)}-{checksum}"
+
+
+def _get_cached_matrix(df: pd.DataFrame) -> pd.DataFrame:
+    cache = st.session_state.setdefault("_stage_matrix_cache", {})
+    cache_key = _matrix_cache_key(df)
+    if cache.get("key") != cache_key:
+        cache["matrix"] = stage_presence_matrix(df)
+        cache["key"] = cache_key
+    return cache.get("matrix", pd.DataFrame())
+
+
 def render_process_matrix(df: pd.DataFrame, artifacts: dict) -> None:
     """Render the wheel vs process coverage matrix."""
 
     st.subheader("轮对流程覆盖矩阵")
-    matrix = stage_presence_matrix(df)
+    matrix = _get_cached_matrix(df)
     if matrix.empty:
         st.info("所选数据中没有可用于构建流程矩阵的记录。")
         return
@@ -308,15 +338,17 @@ def render_process_matrix(df: pd.DataFrame, artifacts: dict) -> None:
 
     with slider_columns[0]:
         if max_row_start > 0:
-            st.slider(
-                "流程滚动条",
+            slider_height = max(260, row_window * 18)
+            new_row_start = vertical_slider(
+                key=row_key,
+                label="流程滚动条",
                 min_value=0,
                 max_value=max_row_start,
                 value=row_start,
-                key=row_key,
                 step=1,
-                label_visibility="collapsed",
+                height=slider_height,
             )
+            st.session_state[row_key] = new_row_start
             st.caption("流程滚动")
         else:
             st.write("")
@@ -339,15 +371,16 @@ def render_process_matrix(df: pd.DataFrame, artifacts: dict) -> None:
         )
 
         if max_col_start > 0:
-            st.slider(
+            col_value = st.slider(
                 "轮对滚动条",
                 min_value=0,
                 max_value=max_col_start,
                 value=col_start,
-                key=col_key,
+                key=f"{col_key}_horizontal",
                 step=1,
                 label_visibility="collapsed",
             )
+            st.session_state[col_key] = col_value
             st.caption("轮对滚动")
 
     artifacts["figures"]["轮对流程覆盖矩阵"] = matrix_fig
@@ -491,21 +524,22 @@ def render_wheelseat_analysis(df: pd.DataFrame, artifacts: dict) -> None:
                 st.plotly_chart(profile_fig, use_container_width=True)
                 artifacts["figures"][title] = profile_fig
 
-            violation_info = summary[summary["xb005"].astype(str) == selected_wheel]
-            if not violation_info.empty and violation_info["violation_count"].iloc[0] > 0:
-                panels_flagged = violation_info.get("violating_panels")
-                if panels_flagged is not None:
-                    flagged_text = panels_flagged.iloc[0]
-                else:
-                    flagged_text = None
-                if isinstance(flagged_text, str) and flagged_text:
-                    st.error(
-                        f"该轮对存在由内向外不递减的测点（{flagged_text}），请复核加工过程。"
-                    )
-                else:
-                    st.error("该轮对存在由内向外不递减的测点，请复核加工过程。")
-            else:
+            wheel_mask = summary["xb005"].astype(str) == selected_wheel
+            wheel_summary = summary[wheel_mask]
+            violations = wheel_summary[wheel_summary["violation_count"] > 0]
+
+            if violations.empty:
                 st.success("该轮对测点符合由内向外逐渐减小的规律。")
+            else:
+                for _, violation in violations.iterrows():
+                    group_label = violation.get("panel_group") or violation.get("panel_side") or "该轮对"
+                    flagged_text = violation.get("violating_panels")
+                    if isinstance(flagged_text, str) and flagged_text:
+                        st.error(
+                            f"{group_label}存在由内向外不递减的测点（{flagged_text}），请复核加工过程。"
+                        )
+                    else:
+                        st.error(f"{group_label}存在由内向外不递减的测点，请复核加工过程。")
 
 
 def render_measurement_gap_section(df: pd.DataFrame, artifacts: dict) -> None:

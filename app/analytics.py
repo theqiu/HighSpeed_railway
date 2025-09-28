@@ -196,6 +196,23 @@ def _normalise_panel_prefix(prefix: Optional[str]) -> Optional[str]:
 _SECTION_ORDER = {letter: idx for idx, letter in enumerate(string.ascii_uppercase, start=1)}
 
 
+def _infer_panel_side(panel_name: object) -> Optional[str]:
+    """Return a side label when a panel refers to the left or right wheel."""
+
+    if pd.isna(panel_name):
+        return None
+
+    text = str(panel_name)
+    if not text:
+        return None
+
+    if "左" in text:
+        return "左侧"
+    if "右" in text:
+        return "右侧"
+    return None
+
+
 def _parse_wheelseat_average(label: object) -> Tuple[Optional[str], Optional[str]]:
     """Extract the panel name and section token from an average ``qcitem`` label."""
 
@@ -527,12 +544,19 @@ def wheelseat_monotonic_analysis(
     if panel_summary.empty:
         return pd.DataFrame(), sequences
 
-    aggregation = panel_summary.groupby(group_keys, as_index=False).agg(
+    panel_summary["panel_side"] = panel_summary["panel_name"].map(_infer_panel_side)
+    panel_summary["panel_group"] = panel_summary["panel_side"].combine_first(panel_summary["panel_name"])
+    panel_summary["panel_group"] = panel_summary["panel_group"].fillna("未命名测点")
+
+    group_columns = group_keys + ["panel_group"]
+
+    aggregation = panel_summary.groupby(group_columns, as_index=False).agg(
         point_count=("point_count", "sum"),
         violation_count=("violation_count", "sum"),
         max_positive_step=("max_positive_step", "max"),
         first_value=("first_value", "first"),
         last_value=("last_value", "last"),
+        panel_side=("panel_side", "first"),
     )
     aggregation["monotonic_descending"] = aggregation["violation_count"] == 0
 
@@ -543,11 +567,11 @@ def wheelseat_monotonic_analysis(
             return ",".join(unique_values) if unique_values else None
 
         names = (
-            violating.groupby(group_keys)["panel_name"]
+            violating.groupby(group_columns)["panel_name"]
             .agg(_panel_list)
             .reset_index(name="violating_panels")
         )
-        aggregation = aggregation.merge(names, on=group_keys, how="left")
+        aggregation = aggregation.merge(names, on=group_columns, how="left")
     else:
         aggregation["violating_panels"] = pd.NA
 
@@ -556,7 +580,9 @@ def wheelseat_monotonic_analysis(
     ]
     remaining_cols = [col for col in aggregation.columns if col not in order_columns]
     summary = aggregation[order_columns + remaining_cols]
-    summary = summary.sort_values(order_columns + ["monotonic_descending"], ascending=[True] * len(order_columns) + [False])
+    sort_columns = order_columns + ["panel_group", "monotonic_descending"]
+    ascending = [True] * len(order_columns) + [True, False]
+    summary = summary.sort_values(sort_columns, ascending=ascending)
 
     return summary, sequences
 

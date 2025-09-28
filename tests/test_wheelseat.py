@@ -96,10 +96,9 @@ class WheelseatMonotonicAnalysisTests(unittest.TestCase):
         df = self._build_dataframe()
         summary, sequences = wheelseat_monotonic_analysis(df)
 
-        self.assertFalse(summary.empty)
-        row = summary.iloc[0]
-        self.assertEqual(int(row["violation_count"]), 0)
-        self.assertTrue(bool(row["monotonic_descending"]))
+        self.assertEqual(set(summary["panel_group"]), {"左侧", "右侧"})
+        self.assertTrue((summary["violation_count"] == 0).all())
+        self.assertTrue(summary["monotonic_descending"].all())
         self.assertIn("panel_name", sequences.columns)
         self.assertTrue(all("平均" in item for item in sequences["qcitem"].dropna().unique()))
 
@@ -108,10 +107,10 @@ class WheelseatMonotonicAnalysisTests(unittest.TestCase):
         summary, _ = wheelseat_monotonic_analysis(df)
 
         self.assertFalse(summary.empty)
-        row = summary.iloc[0]
-        self.assertGreater(int(row["violation_count"]), 0)
-        self.assertFalse(bool(row["monotonic_descending"]))
-        self.assertIn("右轮座", str(row.get("violating_panels", "")))
+        right_side = summary[summary["panel_group"] == "右侧"].iloc[0]
+        self.assertGreater(int(right_side["violation_count"]), 0)
+        self.assertFalse(bool(right_side["monotonic_descending"]))
+        self.assertIn("右轮座", str(right_side.get("violating_panels", "")))
 
 
 if __name__ == "__main__":
