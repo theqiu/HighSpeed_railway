@@ -422,6 +422,9 @@ def wheelseat_monotonic_analysis(
     mask = working["qcitem"].astype(str).str.contains(keyword, na=False)
     subset = working[mask & working["numeric_value"].notna()].copy()
 
+    # 仅考虑带有“平均”字样的轮座测点，避免把多次测量的原始数值纳入趋势判断。
+    subset = subset[subset["qcitem"].astype(str).str.contains("平均", na=False)].copy()
+
     if type_column and type_column in subset.columns and type_value:
         subset = subset[subset[type_column] == type_value]
 
@@ -435,6 +438,14 @@ def wheelseat_monotonic_analysis(
     parsed = subset["qcitem"].apply(_parse_wheelseat_average)
     subset["panel_name"] = parsed.map(lambda item: item[0] if item else None)
     subset["section"] = parsed.map(lambda item: item[1] if item else None)
+
+    # 轮座只有左右两侧，且截面标签为单个字母（A/B/C）。其余数据跳过以避免误报。
+    subset = subset[subset["panel_name"].notna()]
+    subset = subset[subset["panel_name"].astype(str).str.contains("轮座", na=False)]
+    subset = subset[subset["section"].astype(str).str.fullmatch(r"[A-Za-z]", na=False)]
+
+    if subset.empty:
+        return pd.DataFrame(), pd.DataFrame()
 
     if "qcorder" in subset.columns:
         subset["order_rank"] = subset["qcorder"].apply(_extract_order_token)

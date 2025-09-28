@@ -112,6 +112,31 @@ class WheelseatMonotonicAnalysisTests(unittest.TestCase):
         self.assertFalse(bool(right_side["monotonic_descending"]))
         self.assertIn("A->B", str(right_side.get("violating_sections", "")))
 
+    def test_monotonic_ignores_numeric_section_labels(self) -> None:
+        df = self._build_dataframe()
+        extras = pd.DataFrame(
+            [
+                {
+                    "xb005": "W1",
+                    "qcitem": "左轮座截面1平均值",
+                    "inputvalue": "50.0",
+                    "qc_timestamp": pd.Timestamp("2024-02-01"),
+                },
+                {
+                    "xb005": "W1",
+                    "qcitem": "右轮座截面2平均值",
+                    "inputvalue": "49.0",
+                    "qc_timestamp": pd.Timestamp("2024-02-02"),
+                },
+            ]
+        )
+
+        combined = pd.concat([df, extras], ignore_index=True, sort=False)
+        summary, _ = wheelseat_monotonic_analysis(combined)
+
+        self.assertTrue((summary["monotonic_descending"]).all())
+        self.assertTrue((summary["violation_count"] == 0).all())
+
 
 if __name__ == "__main__":
     unittest.main()
