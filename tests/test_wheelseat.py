@@ -6,7 +6,11 @@ import unittest
 
 import pandas as pd
 
-from app.analytics import _parse_wheelseat_average, wheelseat_average_panels
+from app.analytics import (
+    _parse_wheelseat_average,
+    wheelseat_average_panels,
+    wheelseat_monotonic_analysis,
+)
 
 
 class WheelseatAverageParsingTests(unittest.TestCase):
@@ -51,6 +55,63 @@ class WheelseatAveragePanelTests(unittest.TestCase):
 
         seat_panel = panels[panels["panel_name"] == "左轮座"]
         self.assertEqual(seat_panel["section"].tolist(), ["A", "B", "C"])
+
+
+class WheelseatMonotonicAnalysisTests(unittest.TestCase):
+    """Validate the monotonic wheel seat analyser."""
+
+    def _build_dataframe(self, right_b_increase: bool = False) -> pd.DataFrame:
+        base_time = pd.Timestamp("2024-01-01")
+        entries = []
+        left_values = {"A": 12.5, "B": 12.3, "C": 12.1}
+        right_values = {"A": 12.4, "B": 12.2, "C": 12.0}
+        if right_b_increase:
+            right_values["B"] = 12.45
+
+        for idx, (section, value) in enumerate(left_values.items(), start=1):
+            entries.append(
+                {
+                    "xb005": "W1",
+                    "qcitem": f"左轮座截面{section}平均值",
+                    "inputvalue": str(value),
+                    "qc_timestamp": base_time + pd.Timedelta(days=idx),
+                    "qcorder": idx,
+                }
+            )
+
+        for idx, (section, value) in enumerate(right_values.items(), start=1):
+            entries.append(
+                {
+                    "xb005": "W1",
+                    "qcitem": f"右轮座截面{section}平均值",
+                    "inputvalue": str(value),
+                    "qc_timestamp": base_time + pd.Timedelta(days=idx + 5),
+                    "qcorder": idx + 10,
+                }
+            )
+
+        return pd.DataFrame(entries)
+
+    def test_monotonic_summary_passes_when_values_descend(self) -> None:
+        df = self._build_dataframe()
+        summary, sequences = wheelseat_monotonic_analysis(df)
+
+        self.assertFalse(summary.empty)
+        row = summary.iloc[0]
+        self.assertEqual(int(row["violation_count"]), 0)
+        self.assertTrue(bool(row["monotonic_descending"]))
+        self.assertIn("panel_name", sequences.columns)
+        self.assertTrue(all("平均" in item for item in sequences["qcitem"].dropna().unique()))
+
+    def test_monotonic_summary_flags_increasing_section(self) -> None:
+        df = self._build_dataframe(right_b_increase=True)
+        summary, _ = wheelseat_monotonic_analysis(df)
+
+        self.assertFalse(summary.empty)
+        row = summary.iloc[0]
+        self.assertGreater(int(row["violation_count"]), 0)
+        self.assertFalse(bool(row["monotonic_descending"]))
+        self.assertIn("右轮座", str(row.get("violating_panels", "")))
 
 
 if __name__ == "__main__":

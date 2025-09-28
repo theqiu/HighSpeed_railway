@@ -158,28 +158,39 @@ def render_charts(filtered: pd.DataFrame, artifacts: dict) -> None:
         st.info("当前筛选条件下没有检修人员数据。")
     else:
         max_creators = len(creator_rankings)
-        min_window = 1 if max_creators == 1 else min(10, max_creators)
-        window_size = st.slider(
-            "显示检修人员数量",
-            min_value=min_window,
-            max_value=max_creators,
-            value=min(15, max_creators),
-            key="creator_window",
-        )
-        if max_creators > window_size:
-            start_index = st.slider(
-                "起始序号",
-                min_value=0,
-                max_value=max_creators - window_size,
-                value=0,
-                key="creator_start",
-            )
-        else:
-            start_index = 0
+        window_size = min(15, max_creators)
+        start_key = "creator_start"
+        if start_key not in st.session_state:
+            st.session_state[start_key] = 0
+        st.session_state[start_key] = min(st.session_state[start_key], max(0, max_creators - window_size))
+        start_index = st.session_state[start_key]
+
         visible_creators = creator_rankings.iloc[start_index : start_index + window_size]
         figure_height = max(360, 40 * len(visible_creators))
-        creator_fig = bar_ranking(visible_creators, "creator", height=figure_height)
-        st.plotly_chart(creator_fig, use_container_width=True)
+
+        if max_creators > window_size:
+            chart_col, slider_col = st.columns([12, 1])
+        else:
+            chart_col = st.container()
+            slider_col = None
+
+        with chart_col:
+            creator_fig = bar_ranking(visible_creators, "creator", height=figure_height)
+            st.plotly_chart(creator_fig, use_container_width=True)
+
+        if slider_col is not None:
+            with slider_col:
+                st.slider(
+                    "检修人员滚动条",
+                    min_value=0,
+                    max_value=max_creators - window_size,
+                    value=start_index,
+                    key=start_key,
+                    step=1,
+                    label_visibility="collapsed",
+                )
+                st.caption("滚动查看")
+
         artifacts["figures"]["检修人员排行"] = creator_fig
         artifacts["tables"]["检修人员排行"] = creator_rankings.copy()
 
@@ -193,28 +204,39 @@ def render_charts(filtered: pd.DataFrame, artifacts: dict) -> None:
         st.info("当前筛选条件下没有检测项目数据。")
     else:
         max_items = len(qc_rankings)
-        min_window = 1 if max_items == 1 else min(10, max_items)
-        window_size = st.slider(
-            "显示检测项目数量",
-            min_value=min_window,
-            max_value=max_items,
-            value=min(15, max_items),
-            key="qc_window",
-        )
-        if max_items > window_size:
-            start_index = st.slider(
-                "项目起始序号",
-                min_value=0,
-                max_value=max_items - window_size,
-                value=0,
-                key="qc_start",
-            )
-        else:
-            start_index = 0
+        window_size = min(15, max_items)
+        start_key = "qc_start"
+        if start_key not in st.session_state:
+            st.session_state[start_key] = 0
+        st.session_state[start_key] = min(st.session_state[start_key], max(0, max_items - window_size))
+        start_index = st.session_state[start_key]
+
         visible_qc = qc_rankings.iloc[start_index : start_index + window_size]
         figure_height = max(360, 40 * len(visible_qc))
-        qc_fig = bar_ranking(visible_qc, "qcitem", height=figure_height)
-        st.plotly_chart(qc_fig, use_container_width=True)
+
+        if max_items > window_size:
+            chart_col, slider_col = st.columns([12, 1])
+        else:
+            chart_col = st.container()
+            slider_col = None
+
+        with chart_col:
+            qc_fig = bar_ranking(visible_qc, "qcitem", height=figure_height)
+            st.plotly_chart(qc_fig, use_container_width=True)
+
+        if slider_col is not None:
+            with slider_col:
+                st.slider(
+                    "检测项目滚动条",
+                    min_value=0,
+                    max_value=max_items - window_size,
+                    value=start_index,
+                    key=start_key,
+                    step=1,
+                    label_visibility="collapsed",
+                )
+                st.caption("滚动查看")
+
         artifacts["figures"]["检测项目排行"] = qc_fig
         artifacts["tables"]["检测项目排行"] = qc_rankings.copy()
 
@@ -244,7 +266,6 @@ def render_process_matrix(df: pd.DataFrame, artifacts: dict) -> None:
     total_cols = len(matrix.columns)
 
     row_window = total_rows
-    row_start = 0
     if total_rows > 30:
         min_window = min(10, total_rows)
         row_window = st.slider(
@@ -254,19 +275,8 @@ def render_process_matrix(df: pd.DataFrame, artifacts: dict) -> None:
             value=min(30, total_rows),
             step=1,
         )
-        max_row_start = max(total_rows - row_window, 0)
-        row_start = st.slider(
-            "流程起始位置",
-            min_value=0,
-            max_value=max_row_start,
-            value=0,
-            step=1,
-        )
-
-    visible = matrix.iloc[row_start : row_start + row_window]
 
     col_window = total_cols
-    col_start = 0
     if total_cols > 15:
         min_col_window = min(10, total_cols)
         col_window = st.slider(
@@ -276,20 +286,69 @@ def render_process_matrix(df: pd.DataFrame, artifacts: dict) -> None:
             value=min(15, total_cols),
             step=1,
         )
-        max_col_start = max(total_cols - col_window, 0)
-        col_start = st.slider(
-            "轮对起始位置",
-            min_value=0,
-            max_value=max_col_start,
-            value=0,
-            step=1,
-        )
-    visible = visible.iloc[:, col_start : col_start + col_window]
 
-    figure_height = max(400, row_window * 24)
-    figure_width = max(700, col_window * 60)
-    matrix_fig = stage_presence_heatmap(visible, height=figure_height, width=figure_width)
-    st.plotly_chart(matrix_fig, use_container_width=True)
+    max_row_start = max(total_rows - row_window, 0)
+    max_col_start = max(total_cols - col_window, 0)
+
+    row_key = "matrix_row_start"
+    col_key = "matrix_col_start"
+
+    if row_key not in st.session_state:
+        st.session_state[row_key] = 0
+    if col_key not in st.session_state:
+        st.session_state[col_key] = 0
+
+    st.session_state[row_key] = min(st.session_state[row_key], max_row_start)
+    st.session_state[col_key] = min(st.session_state[col_key], max_col_start)
+
+    row_start = st.session_state[row_key]
+    col_start = st.session_state[col_key]
+
+    slider_columns = st.columns([1, 16])
+
+    with slider_columns[0]:
+        if max_row_start > 0:
+            st.slider(
+                "流程滚动条",
+                min_value=0,
+                max_value=max_row_start,
+                value=row_start,
+                key=row_key,
+                step=1,
+                label_visibility="collapsed",
+            )
+            st.caption("流程滚动")
+        else:
+            st.write("")
+
+    with slider_columns[1]:
+        row_lower = row_start
+        row_upper = min(row_start + row_window, total_rows)
+        col_lower = col_start
+        col_upper = min(col_start + col_window, total_cols)
+
+        visible = matrix.iloc[row_lower:row_upper, col_lower:col_upper]
+
+        figure_height = max(400, row_window * 24)
+        figure_width = max(700, col_window * 60)
+        matrix_fig = stage_presence_heatmap(visible, height=figure_height, width=figure_width)
+        st.plotly_chart(matrix_fig, use_container_width=True)
+        st.caption(
+            f"流程 {row_start + 1}-{min(row_start + row_window, total_rows)} / {total_rows} · "
+            f"轮对 {col_start + 1}-{min(col_start + col_window, total_cols)} / {total_cols}"
+        )
+
+        if max_col_start > 0:
+            st.slider(
+                "轮对滚动条",
+                min_value=0,
+                max_value=max_col_start,
+                value=col_start,
+                key=col_key,
+                step=1,
+                label_visibility="collapsed",
+            )
+            st.caption("轮对滚动")
 
     artifacts["figures"]["轮对流程覆盖矩阵"] = matrix_fig
     matrix_table = matrix.reset_index().rename(columns={matrix.index.name or "index": "opno"})
@@ -434,7 +493,17 @@ def render_wheelseat_analysis(df: pd.DataFrame, artifacts: dict) -> None:
 
             violation_info = summary[summary["xb005"].astype(str) == selected_wheel]
             if not violation_info.empty and violation_info["violation_count"].iloc[0] > 0:
-                st.error("该轮对存在由内向外不递减的测点，请复核加工过程。")
+                panels_flagged = violation_info.get("violating_panels")
+                if panels_flagged is not None:
+                    flagged_text = panels_flagged.iloc[0]
+                else:
+                    flagged_text = None
+                if isinstance(flagged_text, str) and flagged_text:
+                    st.error(
+                        f"该轮对存在由内向外不递减的测点（{flagged_text}），请复核加工过程。"
+                    )
+                else:
+                    st.error("该轮对存在由内向外不递减的测点，请复核加工过程。")
             else:
                 st.success("该轮对测点符合由内向外逐渐减小的规律。")
 

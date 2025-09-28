@@ -415,6 +415,10 @@ def wheelseat_monotonic_analysis(
     if type_column and type_column in subset.columns:
         group_keys.insert(0, type_column)
 
+    parsed = subset["qcitem"].apply(_parse_wheelseat_average)
+    subset["panel_name"] = parsed.map(lambda item: item[0] if item else None)
+    subset["section"] = parsed.map(lambda item: item[1] if item else None)
+
     if "qcorder" in subset.columns:
         subset["order_rank"] = subset["qcorder"].apply(_extract_order_token)
     else:
@@ -426,18 +430,74 @@ def wheelseat_monotonic_analysis(
     subset = subset.drop(columns="fallback_rank")
     subset = subset.sort_values(group_keys + ["order_rank", "qc_timestamp"], na_position="last")
 
-    sequences_cols = group_keys + ["order_rank", "qcitem", "numeric_value", "qc_timestamp"]
-    sequences = subset.loc[:, sequences_cols].copy()
+    panel_subset = subset[subset["panel_name"].notna()].copy()
+    if not panel_subset.empty:
+        analysis_df = panel_subset
+    else:
+        analysis_df = subset
+
+    if analysis_df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    if analysis_df["panel_name"].notna().any():
+        panel_order_map: dict[tuple, dict[str, int]] = {}
+
+        def _panel_order(group: pd.Series) -> pd.Series:
+            key = tuple(group.name) if isinstance(group.name, tuple) else (group.name,)
+            if key not in panel_order_map:
+                unique_panels = pd.Index(group.dropna().unique())
+                panel_order_map[key] = {panel: idx for idx, panel in enumerate(unique_panels, start=1)}
+            mapping = panel_order_map[key]
+            return group.map(mapping)
+
+        analysis_df["panel_order"] = (
+            analysis_df.groupby(group_keys)["panel_name"].transform(_panel_order)
+        )
+    else:
+        analysis_df["panel_order"] = pd.NA
+
+    analysis_df["section_rank"] = analysis_df["section"].map(_section_rank)
+    analysis_df = analysis_df.sort_values(
+        group_keys
+        + ["panel_order", "section_rank", "order_rank", "qc_timestamp"],
+        na_position="last",
+    )
+
+    sequences_cols = (
+        group_keys
+        + [
+            "panel_name",
+            "section",
+            "section_rank",
+            "order_rank",
+            "qcitem",
+            "numeric_value",
+            "qc_timestamp",
+        ]
+    )
+    sequences = analysis_df.loc[:, sequences_cols].copy()
     sequences["point_index"] = sequences.groupby(group_keys).cumcount()
 
-    summary_rows: List[dict[str, object]] = []
-    for keys, group in sequences.groupby(group_keys):
-        group_sorted = group.sort_values(["order_rank", "qc_timestamp"], na_position="last")
-        values = group_sorted["numeric_value"].tolist()
+    panel_group_keys = group_keys.copy()
+    if analysis_df["panel_name"].notna().any():
+        panel_group_keys.append("panel_name")
+
+    panel_rows: List[dict[str, object]] = []
+    for keys, group in analysis_df.groupby(panel_group_keys):
+        ordered = group.copy()
+        if ordered["section"].notna().any():
+            ordered = ordered[ordered["section"].notna()].copy()
+            ordered = ordered.sort_values(["section_rank", "qc_timestamp"], na_position="last")
+            ordered = ordered.drop_duplicates(subset="section", keep="last")
+            values = ordered.sort_values("section_rank")["numeric_value"].tolist()
+        else:
+            ordered = ordered.sort_values(["order_rank", "qc_timestamp"], na_position="last")
+            values = ordered["numeric_value"].tolist()
+
         if len(values) < 2:
             max_positive = 0.0
-            monotonic = True
             violation_count = 0
+            monotonic = True
         else:
             diffs = [values[i + 1] - values[i] for i in range(len(values) - 1)]
             positive_diffs = [diff for diff in diffs if diff > tolerance]
@@ -454,25 +514,49 @@ def wheelseat_monotonic_analysis(
             "last_value": values[-1] if values else None,
         }
 
-        if isinstance(keys, tuple):
-            if type_column and len(group_keys) == 2:
-                entry[type_column] = keys[0]
-                entry[wheel_column] = keys[1]
-            else:
-                for name, key_value in zip(group_keys, keys):
-                    entry[name] = key_value
-        else:
-            if type_column and len(group_keys) == 2:
-                entry[type_column] = subset[group_keys[0]].iloc[0]
-            entry[wheel_column] = keys
+        key_tuple = keys if isinstance(keys, tuple) else (keys,)
+        for name, key_value in zip(panel_group_keys, key_tuple):
+            entry[name] = key_value
 
-        summary_rows.append(entry)
+        if "panel_name" not in entry:
+            entry["panel_name"] = group.get("panel_name", pd.Series([pd.NA])).iloc[0]
 
-    summary = pd.DataFrame(summary_rows)
-    if not summary.empty:
-        order_columns = [col for col in [type_column, wheel_column] if col]
-        summary = summary[order_columns + [col for col in summary.columns if col not in order_columns]]
-        summary = summary.sort_values(order_columns + ["monotonic_descending"], ascending=[True] * len(order_columns) + [False])
+        panel_rows.append(entry)
+
+    panel_summary = pd.DataFrame(panel_rows)
+    if panel_summary.empty:
+        return pd.DataFrame(), sequences
+
+    aggregation = panel_summary.groupby(group_keys, as_index=False).agg(
+        point_count=("point_count", "sum"),
+        violation_count=("violation_count", "sum"),
+        max_positive_step=("max_positive_step", "max"),
+        first_value=("first_value", "first"),
+        last_value=("last_value", "last"),
+    )
+    aggregation["monotonic_descending"] = aggregation["violation_count"] == 0
+
+    violating = panel_summary[panel_summary["violation_count"] > 0]
+    if "panel_name" in panel_summary.columns and not violating.empty:
+        def _panel_list(values: pd.Series) -> Optional[str]:
+            unique_values = sorted({str(val) for val in values if pd.notna(val)})
+            return ",".join(unique_values) if unique_values else None
+
+        names = (
+            violating.groupby(group_keys)["panel_name"]
+            .agg(_panel_list)
+            .reset_index(name="violating_panels")
+        )
+        aggregation = aggregation.merge(names, on=group_keys, how="left")
+    else:
+        aggregation["violating_panels"] = pd.NA
+
+    order_columns = [
+        col for col in [type_column, wheel_column] if col and col in aggregation.columns
+    ]
+    remaining_cols = [col for col in aggregation.columns if col not in order_columns]
+    summary = aggregation[order_columns + remaining_cols]
+    summary = summary.sort_values(order_columns + ["monotonic_descending"], ascending=[True] * len(order_columns) + [False])
 
     return summary, sequences
 
