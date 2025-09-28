@@ -334,17 +334,19 @@ def render_process_matrix(df: pd.DataFrame, artifacts: dict) -> None:
 
     row_key = "matrix_row_start"
     col_key = "matrix_col_start"
+    row_state_key = f"{row_key}__state"
+    col_state_key = f"{col_key}__state"
 
-    if row_key not in st.session_state:
-        st.session_state[row_key] = 0
-    if col_key not in st.session_state:
-        st.session_state[col_key] = 0
+    if row_state_key not in st.session_state:
+        st.session_state[row_state_key] = 0
+    if col_state_key not in st.session_state:
+        st.session_state[col_state_key] = 0
 
-    st.session_state[row_key] = min(st.session_state[row_key], max_row_start)
-    st.session_state[col_key] = min(st.session_state[col_key], max_col_start)
+    st.session_state[row_state_key] = min(st.session_state[row_state_key], max_row_start)
+    st.session_state[col_state_key] = min(st.session_state[col_state_key], max_col_start)
 
-    row_start = st.session_state[row_key]
-    col_start = st.session_state[col_key]
+    row_start = st.session_state[row_state_key]
+    col_start = st.session_state[col_state_key]
 
     slider_columns = st.columns([1, 16])
 
@@ -352,7 +354,7 @@ def render_process_matrix(df: pd.DataFrame, artifacts: dict) -> None:
         if max_row_start > 0:
             slider_height = max(260, row_window * 18)
             new_row_start = vertical_slider(
-                key=row_key,
+                key=f"{row_key}__component",
                 label="流程滚动条",
                 min_value=0,
                 max_value=max_row_start,
@@ -360,7 +362,7 @@ def render_process_matrix(df: pd.DataFrame, artifacts: dict) -> None:
                 step=1,
                 height=slider_height,
             )
-            st.session_state[row_key] = new_row_start
+            st.session_state[row_state_key] = new_row_start
             st.caption("流程滚动")
         else:
             st.write("")
@@ -392,7 +394,7 @@ def render_process_matrix(df: pd.DataFrame, artifacts: dict) -> None:
                 step=1,
                 label_visibility="collapsed",
             )
-            st.session_state[col_key] = col_value
+            st.session_state[col_state_key] = col_value
             st.caption("轮对滚动")
 
     artifacts["figures"]["轮对流程覆盖矩阵"] = matrix_fig
