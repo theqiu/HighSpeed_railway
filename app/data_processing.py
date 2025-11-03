@@ -11,13 +11,37 @@ import numpy as np
 import pandas as pd
 
 
+WHEEL_MODEL_PLATFORMS: dict[str, str] = {
+    "M3B": "CRH380B平台",
+    "M3C": "CRH380B平台",
+    "T3B": "CRH380B平台",
+    "T3C": "CRH380B平台",
+    "M3I": "CRH380B平台",
+    "T3I": "CRH380B平台",
+    "M3H": "CRH380B平台",
+    "T3H": "CRH380B平台",
+    "M5A": "CRH5A平台",
+    "T5A": "CRH5A平台",
+    "M5B": "CRH5A平台",
+    "T5B": "CRH5A平台",
+    "GBD": "CR400BF平台",
+    "GBT": "CR400BF平台",
+}
+
+_MODEL_CANDIDATES = tuple(WHEEL_MODEL_PLATFORMS.keys())
+
+
 @dataclass
 class FilterParams:
     """Container with commonly used filter parameters."""
 
-    lot_numbers: Optional[Iterable[str]] = None
+    wheel_models: Optional[Iterable[str]] = None
+    wheel_numbers: Optional[Iterable[str]] = None
+    opnos: Optional[Iterable[str]] = None
     qc_items: Optional[Iterable[str]] = None
     creators: Optional[Iterable[str]] = None
+    trainsets: Optional[Iterable[str]] = None
+    lot_numbers: Optional[Iterable[str]] = None
     date_range: Optional[Tuple[pd.Timestamp, pd.Timestamp]] = None
 
 
@@ -43,6 +67,19 @@ def read_dataset(source: Union[str, "os.PathLike[str]", bytes]) -> pd.DataFrame:
 
     df.columns = [str(col).strip() for col in df.columns]
     return df
+
+
+def _infer_wheel_model(xb005: object) -> Optional[str]:
+    """Return the wheel model code embedded in the wheel identifier."""
+
+    if pd.isna(xb005):
+        return None
+
+    text = str(xb005).upper()
+    for model in _MODEL_CANDIDATES:
+        if model and model in text:
+            return model
+    return None
 
 
 def _parse_datetime(value: object) -> Optional[pd.Timestamp]:
@@ -203,6 +240,20 @@ def preprocess_dataset(df: pd.DataFrame) -> pd.DataFrame:
     df["month"] = df["qc_timestamp"].dt.month
     df["day"] = df["qc_timestamp"].dt.day
 
+    df["wheel_model"] = df.get("xb005").apply(_infer_wheel_model)
+    df["wheel_platform"] = df["wheel_model"].map(WHEEL_MODEL_PLATFORMS)
+
+    if "trainset" not in df.columns:
+        trainset_source = None
+        for candidate in ("车组号", "车组", "trainset_no", "train_no"):
+            if candidate in df.columns:
+                trainset_source = candidate
+                break
+        if trainset_source:
+            df["trainset"] = df[trainset_source]
+        else:
+            df["trainset"] = pd.NA
+
     return df
 
 
@@ -211,12 +262,20 @@ def apply_filters(df: pd.DataFrame, params: FilterParams) -> pd.DataFrame:
 
     mask = pd.Series(True, index=df.index)
 
-    if params.lot_numbers:
-        mask &= df["lotno"].isin(list(params.lot_numbers))
+    if params.wheel_models:
+        mask &= df["wheel_model"].isin(list(params.wheel_models))
+    if params.wheel_numbers:
+        mask &= df["xb005"].isin(list(params.wheel_numbers))
+    if params.opnos:
+        mask &= df["opno"].isin(list(params.opnos))
     if params.qc_items:
         mask &= df["qcitem"].isin(list(params.qc_items))
     if params.creators:
         mask &= df["creator"].isin(list(params.creators))
+    if params.trainsets:
+        mask &= df["trainset"].isin(list(params.trainsets))
+    if params.lot_numbers:
+        mask &= df["lotno"].isin(list(params.lot_numbers))
     if params.date_range and any(params.date_range):
         start, end = params.date_range
         if start is not None:

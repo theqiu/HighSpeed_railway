@@ -91,13 +91,49 @@ def sidebar_filters(df: pd.DataFrame) -> FilterParams:
 
     st.sidebar.header("筛选条件")
 
-    lot_options = sorted(df["lotno"].dropna().unique().tolist())
-    creator_options = sorted(df["creator"].dropna().unique().tolist())
-    qc_options = sorted(df["qcitem"].dropna().unique().tolist())
+    model_series = df.get("wheel_model")
+    model_options = sorted(model_series.dropna().unique().tolist()) if model_series is not None else []
+    model_labels = {
+        model: f"{model}（{platform}）" if platform else model
+        for model, platform in (
+            (
+                model,
+                next(
+                    (
+                        value
+                        for value in df.loc[df["wheel_model"] == model, "wheel_platform"].dropna().unique().tolist()
+                    ),
+                    None,
+                ),
+            )
+            for model in model_options
+        )
+    }
 
-    selected_lots = st.sidebar.multiselect("批次号", options=lot_options)
+    selected_models = st.sidebar.multiselect(
+        "轮对型号",
+        options=model_options,
+        format_func=lambda value: model_labels.get(value, value),
+    )
+
+    wheel_options = sorted(df["xb005"].dropna().unique().tolist()) if "xb005" in df.columns else []
+    selected_wheels = st.sidebar.multiselect("轮对号/条码号", options=wheel_options)
+
+    opno_options = sorted(df["opno"].dropna().unique().tolist()) if "opno" in df.columns else []
+    selected_opnos = st.sidebar.multiselect("检修项目", options=opno_options)
+
+    creator_options = sorted(df["creator"].dropna().unique().tolist()) if "creator" in df.columns else []
     selected_creators = st.sidebar.multiselect("检修人员", options=creator_options)
-    selected_qc = st.sidebar.multiselect("检测项目", options=qc_options)
+
+    qc_options = sorted(df["qcitem"].dropna().unique().tolist()) if "qcitem" in df.columns else []
+    selected_qc = st.sidebar.multiselect("工序项目", options=qc_options)
+
+    trainset_options = []
+    if "trainset" in df.columns:
+        trainset_options = sorted(df["trainset"].dropna().unique().tolist())
+    selected_trainsets = st.sidebar.multiselect("车组号", options=trainset_options)
+    if not trainset_options:
+        st.sidebar.caption("当前数据集中暂无车组号字段，后续可补充相关信息。")
 
     min_date = df["qc_timestamp"].min()
     max_date = df["qc_timestamp"].max()
@@ -118,9 +154,12 @@ def sidebar_filters(df: pd.DataFrame) -> FilterParams:
         )
 
     return FilterParams(
-        lot_numbers=selected_lots or None,
+        wheel_models=selected_models or None,
+        wheel_numbers=selected_wheels or None,
+        opnos=selected_opnos or None,
         creators=selected_creators or None,
         qc_items=selected_qc or None,
+        trainsets=selected_trainsets or None,
         date_range=date_range,
     )
 
@@ -139,8 +178,8 @@ def render_summary(metrics: dict[str, int], artifacts: dict) -> None:
     artifacts["summary"] = metrics
 
 
-def render_charts(filtered: pd.DataFrame, artifacts: dict) -> None:
-    """Render all visualisations for the filtered dataset."""
+def render_overview(filtered: pd.DataFrame, artifacts: dict) -> None:
+    """Render the core overview charts for the filtered dataset."""
 
     st.subheader("状态分布")
     breakdown = status_breakdown(filtered)
@@ -165,6 +204,12 @@ def render_charts(filtered: pd.DataFrame, artifacts: dict) -> None:
         artifacts["figures"]["状态堆叠趋势"] = stacked_fig
         artifacts["tables"]["时间序列明细"] = ts.copy()
 
+    return
+
+
+def render_rankings_section(filtered: pd.DataFrame, artifacts: dict) -> None:
+    """Display rankings and cross-analysis between personnel and QC items."""
+
     st.subheader("检修人员排行")
     creator_rankings = top_entities(filtered, "creator", limit=None)
     if creator_rankings.empty:
@@ -175,7 +220,9 @@ def render_charts(filtered: pd.DataFrame, artifacts: dict) -> None:
         start_key = "creator_start"
         if start_key not in st.session_state:
             st.session_state[start_key] = 0
-        st.session_state[start_key] = min(st.session_state[start_key], max(0, max_creators - window_size))
+        st.session_state[start_key] = min(
+            st.session_state[start_key], max(0, max_creators - window_size)
+        )
         start_index = st.session_state[start_key]
 
         visible_creators = creator_rankings.iloc[start_index : start_index + window_size]
@@ -212,7 +259,9 @@ def render_charts(filtered: pd.DataFrame, artifacts: dict) -> None:
     exclusion_pattern = r"(备注|说明)"
     qc_filtered = filtered.copy()
     if "qcitem" in qc_filtered.columns:
-        qc_filtered = qc_filtered[~qc_filtered["qcitem"].astype(str).str.contains(exclusion_pattern, na=False)]
+        qc_filtered = qc_filtered[
+            ~qc_filtered["qcitem"].astype(str).str.contains(exclusion_pattern, na=False)
+        ]
     qc_rankings = top_entities(qc_filtered, "qcitem", limit=None)
     if qc_rankings.empty:
         st.info("当前筛选条件下没有检测项目数据。")
@@ -222,7 +271,9 @@ def render_charts(filtered: pd.DataFrame, artifacts: dict) -> None:
         start_key = "qc_start"
         if start_key not in st.session_state:
             st.session_state[start_key] = 0
-        st.session_state[start_key] = min(st.session_state[start_key], max(0, max_items - window_size))
+        st.session_state[start_key] = min(
+            st.session_state[start_key], max(0, max_items - window_size)
+        )
         start_index = st.session_state[start_key]
 
         visible_qc = qc_rankings.iloc[start_index : start_index + window_size]
@@ -256,9 +307,12 @@ def render_charts(filtered: pd.DataFrame, artifacts: dict) -> None:
         artifacts["tables"]["检测项目排行"] = qc_rankings.copy()
 
     st.subheader("人员与项目关联热力图")
-    pivot = (
-        filtered.groupby(["creator", "qcitem"]).size().reset_index(name="count")
-    )
+    if {"creator", "qcitem"}.issubset(filtered.columns):
+        pivot = (
+            filtered.groupby(["creator", "qcitem"]).size().reset_index(name="count")
+        )
+    else:
+        pivot = pd.DataFrame()
     if pivot.empty:
         st.info("所选条件下没有数据用于绘制热力图。")
     else:
@@ -266,6 +320,8 @@ def render_charts(filtered: pd.DataFrame, artifacts: dict) -> None:
         st.plotly_chart(relation_fig, use_container_width=True)
         artifacts["figures"]["人员与项目热力图"] = relation_fig
         artifacts["tables"]["人员项目交叉频次"] = pivot.copy()
+
+
 def render_process_matrix(df: pd.DataFrame, artifacts: dict) -> None:
     """Render the wheel vs process coverage matrix."""
 
@@ -668,6 +724,22 @@ def render_combined_alerts_section(df: pd.DataFrame, artifacts: dict) -> None:
     artifacts["figures"]["组合指标预警散点图"] = alert_fig
 
 
+def render_filtered_table(df: pd.DataFrame, artifacts: dict) -> None:
+    """Display the filtered dataset and provide CSV export."""
+
+    st.subheader("筛选数据明细")
+    st.dataframe(df, use_container_width=True)
+    artifacts["tables"]["筛选明细数据"] = df.copy()
+
+    buffer = df.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        "导出筛选结果 CSV",
+        data=buffer,
+        file_name="inspection_filtered.csv",
+        mime="text/csv",
+    )
+
+
 def render_exports(artifacts: dict) -> None:
     """Provide export options for tables and charts."""
 
@@ -719,7 +791,7 @@ def main() -> None:
 
     dataset = load_data(uploaded_file)
     st.sidebar.caption(
-        "未上传文件时，系统将自动加载位于 `data/sample_inspections.csv` 的示例数据。"
+        "未上传文件时，系统将优先加载 `data/2025年6-9月.csv`，若缺失则回退至示例数据。"
     )
 
     filters = sidebar_filters(dataset)
@@ -732,22 +804,29 @@ def main() -> None:
     artifacts = _init_artifacts()
     metrics = compute_summary(filtered)
     render_summary(metrics, artifacts)
-    render_process_matrix(filtered, artifacts)
-    render_wheelseat_analysis(filtered, artifacts)
-    render_numeric_trends(filtered, artifacts)
-    render_measurement_gap_section(filtered, artifacts)
-    render_combined_alerts_section(filtered, artifacts)
-    render_flow_details(filtered, artifacts)
-    render_charts(filtered, artifacts)
+    render_overview(filtered, artifacts)
 
-    st.subheader("明细数据")
-    st.dataframe(filtered, use_container_width=True)
-    artifacts["tables"]["筛选明细数据"] = filtered.copy()
+    module_options = {
+        "人员与项目排行": lambda: render_rankings_section(filtered, artifacts),
+        "轮对流程覆盖矩阵": lambda: render_process_matrix(filtered, artifacts),
+        "轮座尺寸规律检测": lambda: render_wheelseat_analysis(filtered, artifacts),
+        "检测项目数值趋势": lambda: render_numeric_trends(filtered, artifacts),
+        "设备与人工偏差预警": lambda: render_measurement_gap_section(filtered, artifacts),
+        "组合指标预警": lambda: render_combined_alerts_section(filtered, artifacts),
+        "轮对检测项目明细": lambda: render_flow_details(filtered, artifacts),
+        "筛选数据明细": lambda: render_filtered_table(filtered, artifacts),
+        "导出与分享": lambda: render_exports(artifacts),
+    }
 
-    buffer = filtered.to_csv(index=False).encode("utf-8-sig")
-    st.download_button("导出筛选结果 CSV", data=buffer, file_name="inspection_filtered.csv", mime="text/csv")
+    module_labels = ["请选择分析模块"] + list(module_options.keys())
+    selected_module = st.selectbox(
+        "选择需要查看的分析模块",
+        options=module_labels,
+        index=0,
+    )
 
-    render_exports(artifacts)
+    if selected_module in module_options:
+        module_options[selected_module]()
 
 
 if __name__ == "__main__":
