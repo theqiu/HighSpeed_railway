@@ -13,7 +13,7 @@ formulas.
 
 Usage::
 
-    python fill_pressing_report.py
+    python fill_pressing_report.py [--csv 自定义CSV路径] [--workbook 模板路径]
 
 The script appends new rows for every wheel number found in the CSV.  If the
 target workbook already contains data, the numbering in the first column is
@@ -26,13 +26,23 @@ from collections import defaultdict
 from dataclasses import dataclass
 import logging
 import re
+import argparse
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple, TYPE_CHECKING
 
 import pandas as pd
-from openpyxl import load_workbook
-from openpyxl.cell import Cell
-from openpyxl.worksheet.worksheet import Worksheet
+
+try:  # pragma: no cover - optional import guard
+    from openpyxl import load_workbook
+except ImportError:  # pragma: no cover
+    load_workbook = None  # type: ignore
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from openpyxl.cell import Cell
+    from openpyxl.worksheet.worksheet import Worksheet
+else:  # pragma: no cover
+    Cell = Any
+    Worksheet = Any
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -46,7 +56,17 @@ NUMERIC_PATTERN = re.compile(r"^-?\d+(?:\.\d+)?$")
 
 # Columns whose labels include these tokens are assumed to rely on workbook
 # formulas (averages or summary statistics) and are therefore skipped.
-SKIP_TOKENS = ("均", "平均")
+SKIP_TOKENS = ("均", "平均", "过盈量")
+
+
+def normalise_key(value: str) -> str:
+    """Return a normalised token for matching template labels to qcitem rows."""
+
+    if value is None:
+        return ""
+    # Remove whitespace, punctuation commonly used in headers, and harmonise case.
+    cleaned = re.sub(r"[\s:：;；\-_/\\]", "", str(value))
+    return cleaned.upper()
 
 
 @dataclass
@@ -60,7 +80,10 @@ class ColumnDescriptor:
     @property
     def should_skip(self) -> bool:
         display = self.display_name or ""
-        return any(token in display for token in SKIP_TOKENS)
+        detail = self.detail_name or ""
+        return any(token in display for token in SKIP_TOKENS) or any(
+            token in detail for token in SKIP_TOKENS
+        )
 
 
 @dataclass
@@ -115,8 +138,14 @@ def build_lookup(group: pd.DataFrame) -> Tuple[Dict[str, List[Record]], Dict[str
         )
         if record.qcitem:
             by_qcitem[record.qcitem].append(record)
+            norm_qcitem = normalise_key(record.qcitem)
+            if norm_qcitem and norm_qcitem != record.qcitem:
+                by_qcitem[norm_qcitem].append(record)
         if record.opno:
             by_opno[record.opno].append(record)
+            norm_opno = normalise_key(record.opno)
+            if norm_opno and norm_opno != record.opno:
+                by_opno[norm_opno].append(record)
 
     return by_qcitem, by_opno
 
@@ -151,7 +180,13 @@ def resolve_value(
     detail_name = detail_name.strip()
     candidates = by_qcitem.get(detail_name)
     if not candidates:
-        candidates = by_opno.get(detail_name)
+        normalised = normalise_key(detail_name)
+        if normalised and normalised != detail_name:
+            candidates = by_qcitem.get(normalised)
+        if not candidates:
+            candidates = by_opno.get(detail_name)
+        if not candidates and normalised and normalised != detail_name:
+            candidates = by_opno.get(normalised)
         if not candidates:
             return None
 
@@ -244,12 +279,39 @@ def write_rows(
     return written
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Fill the wheel pressing workbook")
+    parser.add_argument(
+        "--csv",
+        type=Path,
+        default=CSV_PATH,
+        help="Path to the MES CSV export (default: data/2024-2025.csv)",
+    )
+    parser.add_argument(
+        "--workbook",
+        type=Path,
+        default=WORKBOOK_PATH,
+        help="Path to the Excel workbook to populate",
+    )
+    parser.add_argument(
+        "--sheet",
+        type=str,
+        default=None,
+        help="Optional worksheet name; defaults to the active sheet",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
     configure_logging()
+    args = parse_args()
 
-    df = load_records(CSV_PATH)
-    wb = load_workbook(WORKBOOK_PATH)
-    sheet = wb.active
+    if load_workbook is None:  # pragma: no cover - handled during runtime
+        raise RuntimeError("openpyxl 未安装，无法读写工作簿。")
+
+    df = load_records(args.csv)
+    wb = load_workbook(args.workbook)
+    sheet = wb[args.sheet] if args.sheet else wb.active
     columns = load_workbook_columns(sheet)
 
     if not columns:
@@ -261,8 +323,8 @@ def main() -> None:
     else:
         logging.info("成功写入 %s 条轮对记录。", total_written)
 
-    wb.save(WORKBOOK_PATH)
-    logging.info("结果已保存至 %s", WORKBOOK_PATH)
+    wb.save(args.workbook)
+    logging.info("结果已保存至 %s", args.workbook)
 
 
 if __name__ == "__main__":
