@@ -13,6 +13,7 @@ except ImportError:  # pragma: no cover
     load_workbook = None
 
 from fill_pressing_report import (
+    extend_formulas,
     iterate_wheels,
     load_records,
     load_workbook_columns,
@@ -82,9 +83,10 @@ class FillPressingReportTests(unittest.TestCase):
         headers = [
             ("序号", "序号"),
             ("轮对号", "轮对号"),
-            ("作业人员", "作业人员-D24A3A3B"),
+            ("轮座测量人", "作业人员-D24A3A3B"),
             ("左轮座A1", "左轮座直径A1"),
             ("左轮座A均", "左轮座直径A"),
+            ("右轮座A1", "右轮座直径A1"),
             ("右轮座B3", "右轮座直径B3"),
             ("左轮过盈量", "左轮配合过盈量"),
         ]
@@ -107,19 +109,84 @@ class FillPressingReportTests(unittest.TestCase):
         sheet = wb.active
         columns = load_workbook_columns(sheet)
 
-        written = write_rows(sheet, columns, iterate_wheels(df))
+        written, max_row = write_rows(sheet, columns, iterate_wheels(df))
+        extend_formulas(sheet, columns, start_row=3, end_row=max_row)
 
         self.assertEqual(written, 1)
         # First data row should start at row 3 with sequence number 1.
         self.assertEqual(sheet.cell(row=3, column=1).value, 1)
         self.assertEqual(sheet.cell(row=3, column=2).value, "109M3C09877")
-        self.assertEqual(sheet.cell(row=3, column=3).value, "WORKER-1")
+        self.assertEqual(sheet.cell(row=3, column=3).value, "MEASURE-A")
         self.assertAlmostEqual(sheet.cell(row=3, column=4).value, 500.11)
         # Average column should retain formula/None (skipped because of 均 token).
         self.assertIsNone(sheet.cell(row=3, column=5).value)
-        self.assertAlmostEqual(sheet.cell(row=3, column=6).value, 601.33)
+        self.assertIsNone(sheet.cell(row=3, column=6).value)
+        self.assertAlmostEqual(sheet.cell(row=3, column=7).value, 601.33)
         # Column containing 过盈量 should be skipped entirely.
-        self.assertIsNone(sheet.cell(row=3, column=7).value)
+        self.assertIsNone(sheet.cell(row=3, column=8).value)
+
+    def test_environment_only_rows_are_skipped(self) -> None:
+        csv_path = self.create_csv()
+        # Overwrite with environment-only data for a new wheel.
+        df = pd.DataFrame(
+            [
+                {
+                    "xb005": "109M3C00001",
+                    "qcitem": "压装设备编号",
+                    "inputvalue": "PRESS-01",
+                    "creator": "ENV",
+                },
+                {
+                    "xb005": "109M3C00001",
+                    "qcitem": "环境温度",
+                    "inputvalue": "20",
+                    "creator": "ENV",
+                },
+            ]
+        )
+        csv_env = self.base / "env.csv"
+        df.to_csv(csv_env, index=False)
+
+        wb_path = self.create_workbook()
+        wb = load_workbook(wb_path)
+        sheet = wb.active
+        columns = load_workbook_columns(sheet)
+
+        written, _ = write_rows(sheet, columns, iterate_wheels(load_records(csv_env)))
+        self.assertEqual(written, 0)
+
+    def test_existing_rows_are_merged(self) -> None:
+        csv_path = self.create_csv()
+        wb_path = self.create_workbook()
+
+        # First run writes initial data.
+        df = load_records(csv_path)
+        wb = load_workbook(wb_path)
+        sheet = wb.active
+        columns = load_workbook_columns(sheet)
+        write_rows(sheet, columns, iterate_wheels(df))
+
+        # Second CSV adds additional measurement for same wheel.
+        df_update = pd.DataFrame(
+            [
+                {
+                    "xb005": "109M3C09877",
+                    "qcitem": "右轮座直径A1",
+                    "inputvalue": "602.11",
+                    "creator": "MEASURE-C",
+                    "qcdate": "20240101130000",
+                }
+            ]
+        )
+        csv_update = self.base / "update.csv"
+        df_update.to_csv(csv_update, index=False)
+
+        written, _ = write_rows(sheet, columns, iterate_wheels(load_records(csv_update)))
+        # No new rows should be created, but existing row gets filled.
+        self.assertEqual(written, 1)
+        self.assertAlmostEqual(sheet.cell(row=3, column=7).value, 601.33)
+        # Column for 右轮座直径A1 now populated in column 6.
+        self.assertAlmostEqual(sheet.cell(row=3, column=6).value, 602.11)
 
 
 if __name__ == "__main__":
