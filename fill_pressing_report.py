@@ -96,11 +96,14 @@ class Record:
     opno: str
 
 
-def configure_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(levelname)s %(message)s",
-    )
+LOGGER = logging.getLogger(__name__)
+
+
+def configure_logging(verbose: bool = False) -> None:
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(level=level, format="%(levelname)s %(message)s", force=True)
+    if verbose:
+        LOGGER.debug("Verbose logging enabled")
 
 
 def load_records(csv_path: Path) -> pd.DataFrame:
@@ -173,6 +176,8 @@ def resolve_value(
     detail_name: str,
     by_qcitem: Dict[str, List[Record]],
     by_opno: Dict[str, List[Record]],
+    *,
+    wheel_id: Optional[str] = None,
 ) -> Optional[object]:
     if not detail_name:
         return None
@@ -188,6 +193,11 @@ def resolve_value(
         if not candidates and normalised and normalised != detail_name:
             candidates = by_opno.get(normalised)
         if not candidates:
+            LOGGER.debug(
+                "[%s] 未找到匹配的记录: %s",
+                wheel_id or "?",
+                detail_name,
+            )
             return None
 
     record = candidates[0]
@@ -200,7 +210,14 @@ def resolve_value(
     else:
         value = record.inputvalue or record.creator
 
-    return normalise_value(value)
+    normalised = normalise_value(value)
+    LOGGER.debug(
+        "[%s] 命中 %s -> %s",
+        wheel_id or "?",
+        detail_name,
+        normalised,
+    )
+    return normalised
 
 
 def load_workbook_columns(sheet: Worksheet) -> List[ColumnDescriptor]:
@@ -245,6 +262,7 @@ def write_rows(
         row_idx = start_row + offset - 1
         seq_value = last_seq + offset
         by_qcitem, by_opno = build_lookup(group)
+        LOGGER.info("处理轮对 %s，记录数 %s", wheel_id, len(group))
 
         for column in columns:
             if column.index == 1:
@@ -260,12 +278,18 @@ def write_rows(
             if detail.strip() in {"轮对号", "轮对编号"}:
                 value = wheel_id
             else:
-                value = resolve_value(detail, by_qcitem, by_opno)
+                value = resolve_value(detail, by_qcitem, by_opno, wheel_id=wheel_id)
 
             if value is None and column.display_name and "轮对号" in column.display_name:
                 value = wheel_id
 
             if value is None:
+                LOGGER.debug(
+                    "[%s] 列 %s/%s 未找到匹配值",
+                    wheel_id,
+                    column.display_name,
+                    detail,
+                )
                 continue
 
             target_cell: Cell = sheet.cell(row=row_idx, column=column.index)
@@ -299,12 +323,17 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional worksheet name; defaults to the active sheet",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging for debugging column matches",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
-    configure_logging()
     args = parse_args()
+    configure_logging(args.verbose)
 
     if load_workbook is None:  # pragma: no cover - handled during runtime
         raise RuntimeError("openpyxl 未安装，无法读写工作簿。")
